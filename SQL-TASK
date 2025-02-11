@@ -1,0 +1,155 @@
+CREATE VIEW  `data-analytics-mate.Students.v_Zaiarna_Module_Task` AS
+WITH
+ account AS ( #Виводимо дані по акаунтам в розрізі дати і країн.
+ SELECT
+   s.date AS date,
+   sp.country AS country,
+   ac.send_interval AS send_interval,
+   ac.is_verified AS is_verified,
+   ac.is_unsubscribed AS is_unsubscribed,
+   COUNT(DISTINCT acs.account_id) AS account_cnt
+ FROM
+   `DA.account` ac
+ JOIN
+   `DA.account_session` acs
+ ON
+   ac.id = acs.account_id
+ JOIN
+   `DA.session` s
+ ON
+   s.ga_session_id = acs.ga_session_id
+ JOIN
+   `DA.session_params` sp
+ ON
+   sp.ga_session_id = s.ga_session_id
+ GROUP BY
+   s.date,
+   sp.country,
+   ac.send_interval,
+   ac.is_verified,
+   ac.is_unsubscribed),
+ email_metrics AS ( #Виводимо дані по листам в розрізі дати і країн.
+ SELECT
+   DATE_ADD(s.date, INTERVAL ems.sent_date DAY) AS date, 
+   sp.country AS country,
+   ac.send_interval AS send_interval,
+   ac.is_verified AS is_verified,
+   ac.is_unsubscribed AS is_unsubscribed,
+   COUNT(DISTINCT ems.id_message) AS sent_msg,
+   COUNT(DISTINCT eo.id_message) AS open_msg,
+   COUNT(DISTINCT ev.id_message) AS visit_msg
+ FROM
+   `DA.email_sent` ems
+ LEFT JOIN
+   `DA.email_open` eo
+ ON
+   ems.id_message = eo.id_message
+ LEFT JOIN
+   `DA.email_visit` ev
+ ON
+   ems.id_message = ev.id_message
+ JOIN
+   `DA.account` ac
+ ON
+   ems.id_account = ac.id
+ JOIN
+   `DA.account_session` acs
+ ON
+   ems.id_account = acs.account_id
+ JOIN
+   `DA.session` s
+ ON
+   acs.ga_session_id = s.ga_session_id
+ JOIN
+   `DA.session_params` sp
+ ON
+   sp.ga_session_id = s.ga_session_id
+ GROUP BY
+   date,
+   country,
+   send_interval,
+   is_verified,
+   is_unsubscribed ),
+ unions AS ( #Обєднуємо отримані дані по акаунтам і листам.
+ SELECT
+   date,
+   country,
+   send_interval,
+   is_verified,
+   is_unsubscribed,
+   account_cnt,
+   NULL AS sent_msg,
+   NULL AS open_msg,
+   NULL AS visit_msg
+ FROM
+   account
+ UNION ALL
+ SELECT
+   date,
+   country,
+   send_interval,
+   is_verified,
+   is_unsubscribed,
+   NULL AS account_cnt,
+   sent_msg,
+   open_msg,
+   visit_msg
+ FROM
+   email_metrics ),
+ final_groups AS ( #Агрегуємо обєднані дані по акаунтам і листам.
+ SELECT
+   date,
+   country,
+   send_interval,
+   is_verified,
+   is_unsubscribed,
+   SUM(account_cnt) AS account_cnt,
+   SUM(sent_msg) AS sent_msg,
+   SUM(open_msg) AS open_msg,
+   SUM(visit_msg) AS visit_msg
+ FROM
+   unions
+ GROUP BY
+   date,
+   country,
+   send_interval,
+   is_verified,
+   is_unsubscribed ),
+ sums AS ( #Рахуємо загальну кількість створених акаунтів і відправлених листів по кожній країні. Виводимо рейтинг країн за кількістю створених акаунтів та відправлених листів.
+ SELECT
+   date,
+   country,
+   send_interval,
+   is_verified,
+   is_unsubscribed,
+   account_cnt,
+   sent_msg,
+   open_msg,
+   visit_msg,
+   SUM(account_cnt) OVER (PARTITION BY country) AS total_country_account_cnt, # загальна кількість створених підписників по країні.
+   SUM(sent_msg) OVER (PARTITION BY country) AS total_country_sent_cnt,  #загальна кількість відправлених листів по країні.
+   DENSE_RANK()OVER (ORDER BY total_country_account_cnt DESC) AS rank_total_country_account_cnt,  #рейтинг країн за кількістю створених акаунтів.
+   DENSE_RANK()OVER (ORDER BY total_country_sent_cnt DESC) AS rank_total_country_sent_cnt   #рейтинг країн за кількістю відправлених листів.
+ FROM (
+   SELECT
+   date,
+   country,
+   send_interval,
+   is_verified,
+   is_unsubscribed,
+   account_cnt,
+   sent_msg,
+   open_msg,
+   visit_msg,
+   SUM(account_cnt) OVER (PARTITION BY country) AS total_country_account_cnt,
+   SUM(sent_msg) OVER (PARTITION BY country) AS total_country_sent_cnt
+   FROM
+ final_groups))
+ #Відфільтровуємо записи, де rank_total_country_account_cnt або rank_total_country_sent_cnt менше або дорівнює 10.
+SELECT
+ *
+FROM
+ sums
+WHERE
+ rank_total_country_account_cnt <= 10
+ OR rank_total_country_sent_cnt <=10
